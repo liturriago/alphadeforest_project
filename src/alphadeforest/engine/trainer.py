@@ -20,7 +20,9 @@ class AlphaDeforestTrainer:
         self.checkpoint_dir = Path("checkpoints")
         self.checkpoint_dir.mkdir(exist_ok=True)
         
-        # Historial para gráficas en notebooks
+        # --- NUEVO: Tracking del mejor modelo ---
+        self.best_val_loss = float('inf')
+        
         self.history = {
             "train_loss": [], "train_rec": [], "train_pred": [],
             "val_loss": [], "val_rec": []
@@ -88,12 +90,11 @@ class AlphaDeforestTrainer:
         return {k: v / n for k, v in summary.items()}
 
     def fit(self, train_loader, val_loader=None):
-        print(f"🚀 Starting training on {self.device} for {self.config.train.epochs} epochs")
+        print(f"🚀 Iniciando entrenamiento en {self.device} por {self.config.train.epochs} épocas")
         
         for epoch in range(self.config.train.epochs):
             train_metrics = self.train_epoch(train_loader)
             
-            # Guardar historial
             self.history["train_loss"].append(train_metrics["loss"])
             self.history["train_rec"].append(train_metrics["rec"])
             self.history["train_pred"].append(train_metrics["pred"])
@@ -103,20 +104,33 @@ class AlphaDeforestTrainer:
             if val_loader:
                 val_metrics = self.evaluate(val_loader)
                 self.history["val_loss"].append(val_metrics["loss"])
+                self.history["val_rec"].append(val_metrics["rec"])
                 log_msg += f" | Val Loss: {val_metrics['loss']:.4f}"
+                
+                # --- NUEVO: Lógica de guardado del mejor modelo ---
+                if val_metrics["loss"] < self.best_val_loss:
+                    self.best_val_loss = val_metrics["loss"]
+                    self.save_checkpoint(epoch, is_best=True)
             
             print(log_msg)
             
-            # Guardar checkpoint cada 10 epochs
+            # Guardar backup regular
             if (epoch + 1) % 10 == 0:
-                self.save_checkpoint(epoch)
+                self.save_checkpoint(epoch, is_best=False)
 
-    def save_checkpoint(self, epoch: int):
-        path = self.checkpoint_dir / f"alphadeforest_epoch_{epoch+1}.pt"
+    def save_checkpoint(self, epoch: int, is_best: bool = False):
+        filename = "best_model.pt" if is_best else f"alphadeforest_epoch_{epoch+1}.pt"
+        path = self.checkpoint_dir / filename
+        
         torch.save({
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'config': self.config.dict(),
+            'best_loss': self.best_val_loss if is_best else None
         }, path)
-        print(f"💾 Checkpoint saved: {path}")
+        
+        if is_best:
+            print(f"⭐ ¡Nuevo mejor modelo guardado!: {path}")
+        else:
+            print(f"💾 Checkpoint regular guardado: {path}")

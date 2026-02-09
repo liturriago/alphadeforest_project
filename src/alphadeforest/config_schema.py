@@ -13,6 +13,8 @@ class DataConfig(BaseModel):
     batch_size: int = 2
     num_workers: int = 2
     shuffle: bool = True
+    train_years: List[int]
+    mode: str = "train"
 
 class TrainConfig(BaseModel):
     epochs: int = 50

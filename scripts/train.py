@@ -13,7 +13,11 @@ def main(config_path: str):
     
     # 2. Preparar Datos
     # Nota: Aquí asumo que ya descargaste los datos con kagglehub
-    dataset = AlphaEarthTemporalDataset(config.data.shards_path)
+    dataset = AlphaEarthTemporalDataset(config.data.shards_path,
+                                        train_years=config.data.train_years,
+                                        mode=config.data.mode                       
+    )
+    
     train_loader = get_dataloader(
         dataset, 
         batch_size=config.data.batch_size, 
