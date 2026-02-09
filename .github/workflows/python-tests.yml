@@ -25,7 +25,10 @@ jobs:
         pip install -e .
         pip install pytest
 
+    - name: Debug File Structure
+      run: |
+        ls -R src/
+
     - name: Run Pytest
       run: |
-        export PYTHONPATH=$PYTHONPATH:$(pwd)/src
-        pytest tests/
+        python -m pytest tests/
