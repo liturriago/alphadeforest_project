@@ -6,16 +6,37 @@ model:
   hidden_dim_mem: 128
 
 data:
+  # Ajusta esta ruta a tu estructura real
   shards_path: "yotoco_wds/shard-*.tar"
-  batch_size: 4
+  
+  # Batch size 8 suele ser un buen punto de partida para GPUs de 16GB.
+  # Bájalo a 4 si te quedas sin memoria (OOM).
+  batch_size: 8
+  
   num_workers: 4
   shuffle: true
-  train_years: [2015, 2016, 2017, 2018, 2019]
+  
+  # ESTRATEGIA DE LÍNEA BASE:
+  # Entrenamos solo con años donde sabemos que el bosque era estable.
+  # Los años 2021, 2022, 2023, 2024 se usarán implícitamente en el test.
+  train_years: [2017, 2018, 2019, 2020]
+  
   mode: "train"
 
 train:
+  # Semilla para reproducibilidad (esto se pasará a utils.set_seed)
+  seed: 42
+  
   epochs: 100
-  lr: 0.0005
+  lr: 0.0005  # Un LR un poco más bajo para estabilidad en RNNs
+  
+  # Balance de pérdidas:
+  # Damos casi el mismo peso a la predicción futura (0.8) que a la foto actual (1.0)
+  # para que el modelo sea sensible a cambios abruptos en el tiempo.
   lambda_rec: 1.0
   lambda_pred: 0.8
+  
   device: "cuda"
+  
+  checkpoint_dir: "checkpoints/experiment_01"
+  results_dir: "results/experiment_01"

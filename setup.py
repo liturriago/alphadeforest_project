@@ -18,6 +18,6 @@ setup(
     extras_require={
         "test": ["pytest"],
     },
-    author="Tu Nombre",
+    author="Lucas Iturriago",
     description="Framework para detección de deforestación usando CAE y Memory Networks",
 )
