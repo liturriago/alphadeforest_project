@@ -1,6 +1,10 @@
-# AlphaDeforest 🛰️🌲
+![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)
+[![Python Tests](https://img.shields.io/github/actions/workflow/status/liturriago/AlphaDeforest/python-tests.yml?branch=main&style=for-the-badge&logo=github)](https://github.com/liturriago/AlphaDeforest/actions/workflows/python-tests.yml)
 
-[![Python Tests](https://github.com/liturriago/alphadeforest_project/actions/workflows/python-tests.yml/badge.svg?branch=main)](https://github.com/liturriago/alphadeforest_project/actions/workflows/python-tests.yml)
+![Banner](./assets/banner.png)
+
+# AlphaDeforest 🛰️🌲
 
 **AlphaDeforest** es un framework de Deep Learning diseñado para la detección de cambios en la cobertura forestal mediante el análisis de secuencias temporales de tiles satelitales. Este proyecto aplica principios de **ML Engineering y MLOps** para garantizar la reproducibilidad y escalabilidad en la investigación académica.
 
