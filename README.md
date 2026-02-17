@@ -1,6 +1,6 @@
 ![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)
-[![Python Tests](https://img.shields.io/github/actions/workflow/status/liturriago/AlphaDeforest/python-tests.yml?branch=main&style=for-the-badge&logo=github)](https://github.com/liturriago/AlphaDeforest/actions/workflows/python-tests.yml)
+[![Python Tests](https://img.shields.io/github/actions/workflow/status/liturriago/AlphaDeforest/mlops_engine.yml?branch=main&style=for-the-badge&logo=github)](https://github.com/liturriago/AlphaDeforest/actions/workflows/mlops_engine.yml)
 
 ![Banner](./assets/banner.png)
 
