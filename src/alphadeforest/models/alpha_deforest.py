@@ -1,83 +1,190 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from .cae import ConvolutionalAutoencoder
-from .memory import MemoryNetwork
+from tqdm import tqdm
+from pathlib import Path
+from typing import Dict, Any
+from torch.amp import autocast, GradScaler
+from alphadeforest.config_schema import TrainConfig
+import copy 
 
-class AlphaDeforest(nn.Module):
+
+class AlphaDeforestTrainer:
+
     def __init__(
         self,
-        embedding_dim: int = 64,
-        latent_dim: int = 64,
-        cae_h: int = 16,
-        cae_w: int = 16,
-        hidden_dim_mem: int = 128,
+        model: torch.nn.Module,
+        optimizer: torch.optim.Optimizer,
+        train_loader: torch.utils.data.DataLoader,
+        val_loader: torch.utils.data.DataLoader,
+        criterion: torch.nn.Module,
+        config: TrainConfig,
     ):
-        super().__init__()
+        self.device = torch.device(config.device)
+        self.model = model
+        self.optimizer = optimizer
+        self.train_loader = train_loader
+        self.val_loader = val_loader
+        self.criterion = criterion
+        self.config = config
 
-        self.cae = ConvolutionalAutoencoder(
-            embedding_dim=embedding_dim,
-            latent_dim=latent_dim
-        )
+        self.checkpoint_dir = Path(config.checkpoint_dir)
+        self.checkpoint_dir.mkdir(exist_ok=True)
 
-        # Dimensión aplanada del vector latente espacial (z_f)
-        self.z_f_dim = latent_dim * cae_h * cae_w
+        self.best_val_loss = float("inf")
 
-        self.memory = MemoryNetwork(
-            input_dim=self.z_f_dim,
-            hidden_dim=hidden_dim_mem
-        )
-
-    def forward(self, x_seq: torch.Tensor):
-        """
-        x_seq: (B, T, C, H, W) 
-        Donde C es Channels (o D en tu notación anterior)
-        """
-        B, T, C, H, W = x_seq.shape
-
-        # --- OPTIMIZACIÓN 1: Procesamiento Paralelo (Batch Flattening) ---
-        # Colapsamos Batch y Time para procesar todas las imágenes juntas
-        # (B*T, C, H, W)
-        x_flat = x_seq.view(B * T, C, H, W)
-
-        # Pasamos todo por el CAE de una sola vez (Mucho más rápido que un bucle)
-        x_rec_flat, z_f_flat = self.cae(x_flat)
-
-        # Restauramos las dimensiones originales
-        # Reconstrucciones: (B, T, C, H, W)
-        reconstructions = x_rec_flat.view(B, T, C, H, W)
-        
-        # Latentes: (B, T, Z_dim)
-        # Aplanamos las dimensiones espaciales del latente para la memoria
-        z_f_seq = z_f_flat.view(B, T, -1)
-
-        # --- OPTIMIZACIÓN 2: Cálculo de Error Vectorizado ---
-        # Calculamos MSE sin reducción para mantener las dimensiones
-        # (B, T, C, H, W) -> Promediamos sobre (C, H, W) para obtener error por frame
-        diff = F.mse_loss(reconstructions, x_seq, reduction="none")
-        recon_errors = diff.mean(dim=(2, 3, 4))  # Resultado: (B, T)
-
-        # --- MEMORIA (Secuencial) ---
-        # La memoria sigue siendo secuencial porque depende del pasado (Autoregresiva)
-        z_pred_seq = []
-        
-        # Iteramos desde t=1 porque necesitamos contexto previo para predecir
-        for t in range(1, T):
-            # Pasamos la historia hasta t (z_f_seq[:, :t])
-            # Asumimos que tu MemoryNetwork maneja secuencias de longitud variable
-            z_pred = self.memory(z_f_seq[:, :t])
-            z_pred_seq.append(z_pred)
-
-        # Apilamos las predicciones
-        if len(z_pred_seq) > 0:
-            z_pred_seq = torch.stack(z_pred_seq, dim=1)  # (B, T-1, Z)
-        else:
-            # Fallback por si T < 2 (aunque el dataset lo filtra)
-            z_pred_seq = torch.empty(B, 0, self.z_f_dim, device=x_seq.device)
-
-        return {
-            "reconstructions": reconstructions,
-            "z_f": z_f_seq,
-            "z_pred": z_pred_seq,
-            "recon_error": recon_errors,
+        self.history = {
+            "train_loss": [], "train_rec": [], "train_pred": [],
+            "val_loss": [], "val_rec": [], "val_pred": []
         }
+
+        self.use_amp = config.use_amp and (self.device.type == "cuda")
+        self.scaler = GradScaler(enabled=self.use_amp)
+
+        self.best_acc = 0.0
+        self.best_model_wts = copy.deepcopy(model.state_dict())
+
+    # ============================================================
+    # TRAIN
+    # ============================================================
+
+    def train_epoch(self, dataloader):
+
+        self.model.train()
+
+        summary = {"loss": 0.0, "rec": 0.0, "pred": 0.0}
+
+        if len(dataloader) == 0:
+            print("⚠ Train loader vacío")
+            return summary
+
+        pbar = tqdm(dataloader, desc="Training")
+
+        for batch in pbar:
+
+            x_seq = batch.to(self.device)
+
+            self.optimizer.zero_grad()
+
+            with autocast(enabled=self.device.type == "cuda"):
+
+                outputs = self.model(x_seq)
+                loss, l_rec, l_pred = self.criterion(outputs, x_seq)
+
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+
+            summary["loss"] += loss.item()
+            summary["rec"] += l_rec.item()
+            summary["pred"] += l_pred.item()
+
+            pbar.set_postfix({
+                "Total": f"{loss.item():.4f}",
+                "Rec": f"{l_rec.item():.4f}",
+                "Pred": f"{l_pred.item():.4f}"
+            })
+
+        n = len(dataloader)
+
+        return {k: v / n for k, v in summary.items()}
+
+    # ============================================================
+    # EVAL
+    # ============================================================
+
+    @torch.no_grad()
+    def evaluate(self, dataloader):
+
+        self.model.eval()
+
+        summary = {"loss": 0.0, "rec": 0.0, "pred": 0.0}
+
+        if dataloader is None or len(dataloader) == 0:
+            print("⚠ Val loader vacío")
+            return summary
+
+        for batch in dataloader:
+
+            x_seq = batch.to(self.device)
+
+            with torch.cuda.amp.autocast(enabled=self.device.type == "cuda"):
+
+                outputs = self.model(x_seq)
+                loss, l_rec, l_pred = self.criterion(outputs, x_seq)
+
+            summary["loss"] += loss.item()
+            summary["rec"] += l_rec.item()
+            summary["pred"] += l_pred.item()
+
+        n = len(dataloader)
+
+        return {k: v / n for k, v in summary.items()}
+
+    # ============================================================
+    # FIT
+    # ============================================================
+
+    def fit(self, train_loader, val_loader=None):
+
+        print(f"Iniciando entrenamiento en {self.device}")
+
+        for epoch in range(self.config.train.epochs):
+
+            train_metrics = self.train_epoch(train_loader)
+
+            self.history["train_loss"].append(train_metrics["loss"])
+            self.history["train_rec"].append(train_metrics["rec"])
+            self.history["train_pred"].append(train_metrics["pred"])
+
+            log_msg = (
+                f"Epoch [{epoch+1}/{self.config.train.epochs}] "
+                f"| Loss: {train_metrics['loss']:.4f} "
+                f"| Rec: {train_metrics['rec']:.4f} "
+                f"| Pred: {train_metrics['pred']:.4f}"
+            )
+
+            if val_loader:
+
+                val_metrics = self.evaluate(val_loader)
+
+                self.history["val_loss"].append(val_metrics["loss"])
+                self.history["val_rec"].append(val_metrics["rec"])
+                self.history["val_pred"].append(val_metrics["pred"])
+
+                log_msg += (
+                    f" | Val Loss: {val_metrics['loss']:.4f}"
+                    f" | Val Rec: {val_metrics['rec']:.4f}"
+                )
+
+                # Mejor modelo
+                if val_metrics["loss"] < self.best_val_loss:
+                    self.best_val_loss = val_metrics["loss"]
+                    self.save_checkpoint(epoch, is_best=True)
+
+            print(log_msg)
+
+            # Backup periódico
+            if (epoch + 1) % 10 == 0:
+                self.save_checkpoint(epoch, is_best=False)
+
+    # ============================================================
+    # CHECKPOINT
+    # ============================================================
+
+    def save_checkpoint(self, epoch: int, is_best: bool = False):
+
+        filename = "best_model.pt" if is_best else f"alphadeforest_epoch_{epoch+1}.pt"
+        path = self.checkpoint_dir / filename
+
+        torch.save({
+            "epoch": epoch,
+            "model_state_dict": self.model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "config": self.config.dict(),
+            "best_val_loss": self.best_val_loss
+        }, path)
+
+        if is_best:
+            print(f"Nuevo mejor modelo guardado → {path}")
+        else:
+            print(f"Checkpoint guardado → {path}")

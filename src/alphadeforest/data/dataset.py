@@ -1,53 +1,81 @@
-import io
+import os
 import json
 import numpy as np
 import torch
-import webdataset as wds
 from collections import defaultdict
 from torch.utils.data import Dataset, DataLoader
-from typing import List
+from typing import List, Dict
+
 
 class AlphaEarthTemporalDataset(Dataset):
     def __init__(
         self,
-        shards_path: str,
-        train_years: List[int],
-        mode: str = "train",   # "train" | "full"
+        dataset_dir: str,
+        years: List[int],          # ← años a usar (train o full)
+        mode: str = "train",       # "train" | "full"
         transform=None,
     ):
         assert mode in ["train", "full"]
-        self.shards_path = shards_path
-        self.train_years = set(train_years)
+
+        self.dataset_dir = dataset_dir
+        self.years = set(years)
         self.mode = mode
         self.transform = transform
 
-        # --- NUEVO: Para mapeo geográfico ---
-        self.tile_metadata = [] 
+        self.tile_metadata: List[Dict] = []
         self.sequences = self._load_sequences()
 
+    # ==========================================================
+    # 1. Cargar archivos planos desde Kaggle
+    # ==========================================================
     def _load_sequences(self):
+
         tiles = defaultdict(list)
-        # Diccionario auxiliar para guardar metadata por tile_id
-        coords_map = {} 
+        coords_map = {}
 
-        dataset = wds.WebDataset(self.shards_path, shardshuffle=False)
+        files = os.listdir(self.dataset_dir)
 
-        # 1. Leer shards y agrupar por tile
-        for sample in dataset:
-            meta = json.loads(
-                sample["meta.json"].decode("utf-8")
-                if isinstance(sample["meta.json"], bytes)
-                else sample["meta.json"]
-            )
-            emb = np.load(io.BytesIO(sample["emb.npy"]))
+        json_files = [f for f in files if f.endswith(".json")]
+
+        if len(json_files) == 0:
+            raise RuntimeError("No se encontraron archivos JSON.")
+
+        print(f"Archivos JSON detectados: {len(json_files)}")
+
+        # ------------------------------------------------------
+        # Leer metadata + embeddings
+        # ------------------------------------------------------
+        for json_name in json_files:
+
+            json_path = os.path.join(self.dataset_dir, json_name)
+
+            with open(json_path, "r") as f:
+                meta = json.load(f)
+
+            npy_name = json_name.replace(".json", ".npy")
+            npy_path = os.path.join(self.dataset_dir, npy_name)
+
+            if not os.path.exists(npy_path):
+                continue
+
+            emb = np.load(npy_path)
+
+            # Validación defensiva crítica
+            if emb.ndim != 3:
+                print(f"Embedding inválido: {npy_name} → shape {emb.shape}")
+                continue
 
             tile_id = meta["tile_id"]
+            year = meta["year"]
+
+            if year not in self.years:
+                continue
+
             tiles[tile_id].append({
-                "year": meta["year"],
+                "year": year,
                 "emb": emb
             })
-            
-            # Guardamos las coordenadas una sola vez por tile_id
+
             if tile_id not in coords_map:
                 coords_map[tile_id] = {
                     "row": meta.get("row", 0),
@@ -55,32 +83,45 @@ class AlphaEarthTemporalDataset(Dataset):
                     "tile_id": tile_id
                 }
 
-        # 2. Construir secuencias temporales
+        # ------------------------------------------------------
+        # Construcción de secuencias temporales
+        # ------------------------------------------------------
         sequences = []
-        for tile_id in sorted(tiles.keys()):
-            samples = sorted(tiles[tile_id], key=lambda x: x["year"])
 
-            if self.mode == "train":
-                samples = [s for s in samples if s["year"] in self.train_years]
+        for tile_id in sorted(tiles.keys()):
+
+            samples = sorted(tiles[tile_id], key=lambda x: x["year"])
 
             if len(samples) < 2:
                 continue
 
-            # --- NUEVO: Guardar metadata en el mismo orden que las secuencias ---
-            self.tile_metadata.append(coords_map[tile_id])
-            
-            seq = np.stack([s["emb"] for s in samples], axis=0)  # (T, H, W, D)
-            sequences.append(seq)
+            seq = np.stack([s["emb"] for s in samples], axis=0)
 
-        print(f"✅ Dataset cargado: {len(sequences)} secuencias encontradas.")
+            # Limpieza numérica (MUY importante)
+            seq = np.nan_to_num(seq, nan=0.0, posinf=0.0, neginf=0.0)
+
+            sequences.append(seq)
+            self.tile_metadata.append(coords_map[tile_id])
+
+        print(f"Secuencias válidas construidas: {len(sequences)}")
+
+        if len(sequences) == 0:
+            raise RuntimeError("No se construyeron secuencias.")
+
         return sequences
 
+    # ==========================================================
     def __len__(self):
         return len(self.sequences)
 
+    # ==========================================================
+    # 2. Conversión PyTorch correcta
+    # ==========================================================
     def __getitem__(self, idx):
+
         seq = self.sequences[idx]
-        # (T, H, W, D) -> (T, D, H, W)
+
+        # (T, H, W, D) → (T, D, H, W)
         seq = torch.from_numpy(seq).float().permute(0, 3, 1, 2)
 
         if self.transform:

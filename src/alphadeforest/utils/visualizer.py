@@ -27,4 +27,4 @@ def save_anomaly_map(scores_dict, year, output_dir="results/maps"):
     plt.savefig(path, dpi=300, bbox_inches="tight")
     plt.close()
 
-    print(f"💾 Map saved: {path}")
+    print(f"Map saved: {path}")

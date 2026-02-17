@@ -1,51 +1,39 @@
 import os
+import time
 import torch
+import copy
 import torch.nn.functional as F
 from tqdm import tqdm
 from pathlib import Path
 from typing import Dict, Any
+from alphadeforest.config_schema import TrainConfig
 
 class AlphaDeforestTrainer:
-    def __init__(
-        self,
-        model: torch.nn.Module,
-        optimizer: torch.optim.Optimizer,
-        config: Any,  # MainConfig de Pydantic
-        device: str = "cuda"
-    ):
-        self.model = model.to(device)
+    def __init__(self, model, train_loader, valid_loader, criterion, optimizer, config: TrainConfig):
+        self.model = model
+        self.train_loader = train_loader
+        self.valid_loader = valid_loader
+        self.criterion = criterion
         self.optimizer = optimizer
         self.config = config
-        self.device = device
-        self.checkpoint_dir = Path("checkpoints")
-        self.checkpoint_dir.mkdir(exist_ok=True)
+        self.device = torch.device(config.device)
+
+        self.use_amp = config.use_amp and (self.device.type == 'cuda')
+        self.scaler = GradScaler(enabled=self.use_amp)
         
-        # --- NUEVO: Tracking del mejor modelo ---
-        self.best_val_loss = float('inf')
+        self.best_loss = float('inf')
         
         self.history = {
             "train_loss": [], "train_rec": [], "train_pred": [],
             "val_loss": [], "val_rec": []
         }
 
-    def _compute_loss(self, outputs: Dict[str, torch.Tensor], targets: torch.Tensor):
-        """
-        Calcula la pérdida combinada: L_total = λ_rec * L_rec + λ_pred * L_pred
-        """
-        # 1. Error de Reconstrucción (Espacial)
-        x_rec = outputs["reconstructions"]
-        loss_rec = F.mse_loss(x_rec, targets)
+        self.best_model_wts = copy.deepcopy(model.state_dict())
 
-        # 2. Error de Predicción (Temporal)
-        # z_f: (B, T, Z) -> tomamos desde t=1 para comparar con z_pred
-        z_f_target = outputs["z_f"][:, 1:]
-        z_pred = outputs["z_pred"]
-        loss_pred = F.mse_loss(z_pred, z_f_target)
-
-        total_loss = (self.config.train.lambda_rec * loss_rec + 
-                      self.config.train.lambda_pred * loss_pred)
-        
-        return total_loss, loss_rec, loss_pred
+    def _format_time(self, seconds: float) -> str:
+        """Converts seconds to MM:SS format."""
+        m, s = divmod(int(seconds), 60)
+        return f"{m:02d}:{s:02d}" 
 
     def train_epoch(self, dataloader):
         self.model.train()
@@ -58,7 +46,7 @@ class AlphaDeforestTrainer:
             self.optimizer.zero_grad()
             outputs = self.model(x_seq)
             
-            loss, l_rec, l_pred = self._compute_loss(outputs, x_seq)
+            loss, l_rec, l_pred = self.criterion(outputs, x_seq)
             
             loss.backward()
             self.optimizer.step()
@@ -80,7 +68,7 @@ class AlphaDeforestTrainer:
         for batch in dataloader:
             x_seq = batch.to(self.device)
             outputs = self.model(x_seq)
-            loss, l_rec, l_pred = self._compute_loss(outputs, x_seq)
+            loss, l_rec, l_pred = self.criterion(outputs, x_seq)
             
             summary["loss"] += loss.item()
             summary["rec"] += l_rec.item()
@@ -89,48 +77,40 @@ class AlphaDeforestTrainer:
         n = len(dataloader)
         return {k: v / n for k, v in summary.items()}
 
-    def fit(self, train_loader, val_loader=None):
-        print(f"🚀 Iniciando entrenamiento en {self.device} por {self.config.train.epochs} épocas")
+    def fit(self, scheduler=None):
+        total_train_start = time.time()
+        print(f"Iniciando entrenamiento en {self.device} por {self.config.epochs} épocas")
         
-        for epoch in range(self.config.train.epochs):
+        for epoch in range(self.config.epochs):
             train_metrics = self.train_epoch(train_loader)
             
             self.history["train_loss"].append(train_metrics["loss"])
             self.history["train_rec"].append(train_metrics["rec"])
             self.history["train_pred"].append(train_metrics["pred"])
             
-            log_msg = f"Epoch [{epoch+1}/{self.config.train.epochs}] | Loss: {train_metrics['loss']:.4f}"
+            print(f"Epoch [{epoch+1}/{self.config.train.epochs}] | Loss: {train_metrics['loss']:.4f}")
             
             if val_loader:
                 val_metrics = self.evaluate(val_loader)
                 self.history["val_loss"].append(val_metrics["loss"])
                 self.history["val_rec"].append(val_metrics["rec"])
-                log_msg += f" | Val Loss: {val_metrics['loss']:.4f}"
                 
-                # --- NUEVO: Lógica de guardado del mejor modelo ---
-                if val_metrics["loss"] < self.best_val_loss:
-                    self.best_val_loss = val_metrics["loss"]
-                    self.save_checkpoint(epoch, is_best=True)
-            
-            print(log_msg)
-            
-            # Guardar backup regular
-            if (epoch + 1) % 10 == 0:
-                self.save_checkpoint(epoch, is_best=False)
+                if val_metrics["loss"] < self.best_loss:
+                    self.best_loss = val_metrics["loss"]
+                    self.best_model_wts = copy.deepcopy(self.model.state_dict())
 
-    def save_checkpoint(self, epoch: int, is_best: bool = False):
-        filename = "best_model.pt" if is_best else f"alphadeforest_epoch_{epoch+1}.pt"
-        path = self.checkpoint_dir / filename
+            else:
+                if train_metrics["loss"] < self.best_loss:
+                    self.best_loss = train_metrics["loss"]
+                    self.best_model_wts = copy.deepcopy(self.model.state_dict())
+
+            if scheduler: scheduler.step()
         
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'config': self.config.dict(),
-            'best_loss': self.best_val_loss if is_best else None
-        }, path)
-        
-        if is_best:
-            print(f"⭐ ¡Nuevo mejor modelo guardado!: {path}")
-        else:
-            print(f"💾 Checkpoint regular guardado: {path}")
+        total_time = time.time() - total_train_start
+        print(f"\n{' TRAINING COMPLETE ':=^50}")
+        print(f"Total Duration: {self._format_time(total_time)}")
+        print(f"Best Target Accuracy: {self.best_loss:.4f}")
+        print("="*50)
+
+        self.model.load_state_dict(self.best_model_wts)
+        return self.model

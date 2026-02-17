@@ -9,11 +9,12 @@ class ModelConfig(BaseModel):
     hidden_dim_mem: int = Field(128, description="Tamaño de la capa oculta de la MemoryNetwork (GRU/LSTM)")
 
 class DataConfig(BaseModel):
-    shards_path: str = Field(..., description="Ruta glob a los archivos .tar (ej: data/shards-*.tar)")
+    dataset_dir: str = Field(..., description="Ruta glob a los archivos .tar (ej: data/shards-*.tar)")
     batch_size: int = Field(4, ge=1, description="Tamaño del batch (cuidado con la VRAM en secuencias largas)")
     num_workers: int = Field(4, ge=0, description="Hilos para carga de datos (WebDataset se beneficia de esto)")
     shuffle: bool = Field(True, description="Si True, mezcla los shards y las muestras durante el entrenamiento")
     train_years: List[int] = Field(..., description="Lista de años considerados 'normales' para entrenar")
+    test_year: List[int] = Field(..., description="Año a evaluar")
     mode: str = Field("train", pattern="^(train|full)$", description="Modo de carga: 'train' (filtra años) o 'full' (todo)")
 
 class TrainConfig(BaseModel):
