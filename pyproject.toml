@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alphadeforest"
+version = "0.1.0"
+description = "Framework for deforestation detection using CAE and Memory Networks"
+authors = [{ name = "Lucas Iturriago", email = "liturriago@unal.edu.co" }]
+requires-python = ">=3.9"
+dependencies = [
+    "torch>=2.0.0",
+    "numpy",
+    "webdataset",
+    "pydantic>=2.0.0",
+    "pyyaml",
+    "tqdm",
+    "matplotlib",
+    "kagglehub"
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest"
+]
+dev = [
+    "pytest",
+    "black",
+    "isort",
+    "mypy"
+]
+
+[tool.pytest.ini_options]
+# Specifies the directory for tests
+testpaths = ["tests"]
+# Patterns for file and function discovery
+python_files = "test_*.py"
+python_functions = "test_*"
+# Default arguments: -v (verbose), -ra (report all except passed)
+addopts = "-v -ra"
+
+[tool.setuptools.packages.find]
+# Directs setuptools to look for code in the src/ directory
+where = ["src"]

@@ -1,0 +1,37 @@
+name: ML Pipeline Tests
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        cache: 'pip' # Accelerate runs by caching libraries
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        # Install the local package + development dependencies [dev]
+        pip install -e .[dev]
+
+    - name: Debug Project Structure
+      run: |
+        echo "--- Content of src/ ---"
+        ls -R src/
+        echo "--- Content of tests/ ---"
+        ls -R tests/
+
+    - name: Run Pytest
+      run: |
+        # 'python -m' is no longer needed if installed in editable mode
+        pytest

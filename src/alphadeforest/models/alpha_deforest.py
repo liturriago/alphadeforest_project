@@ -1,190 +1,100 @@
+"""
+Main model architecture for AlphaDeforest.
+This module combines the Convolutional Autoencoder and the Memory Network
+to perform temporal anomaly detection in satellite imagery.
+"""
+
 import torch
-import torch.nn.functional as F
-from tqdm import tqdm
-from pathlib import Path
-from typing import Dict, Any
-from torch.amp import autocast, GradScaler
-from alphadeforest.config_schema import TrainConfig
-import copy 
+import torch.nn as nn
+from typing import Dict, Tuple, Any
+from alphadeforest.models.cae import ConvolutionalAutoencoder
+from alphadeforest.models.memory import MemoryNetwork
 
 
-class AlphaDeforestTrainer:
-
+class AlphaDeforest(nn.Module):
+    """
+    AlphaDeforest model for temporal anomaly detection.
+    Combines a CAE for spatial feature extraction and an RNN-based Memory Network
+    for temporal prediction.
+    """
     def __init__(
         self,
-        model: torch.nn.Module,
-        optimizer: torch.optim.Optimizer,
-        train_loader: torch.utils.data.DataLoader,
-        val_loader: torch.utils.data.DataLoader,
-        criterion: torch.nn.Module,
-        config: TrainConfig,
+        embedding_dim: int = 64,
+        latent_dim: int = 64,
+        cae_h: int = 16,
+        cae_w: int = 16,
+        hidden_dim_mem: int = 128
     ):
-        self.device = torch.device(config.device)
-        self.model = model
-        self.optimizer = optimizer
-        self.train_loader = train_loader
-        self.val_loader = val_loader
-        self.criterion = criterion
-        self.config = config
+        """
+        Initializes the AlphaDeforest model.
 
-        self.checkpoint_dir = Path(config.checkpoint_dir)
-        self.checkpoint_dir.mkdir(exist_ok=True)
+        Args:
+            embedding_dim (int): Input feature dimension.
+            latent_dim (int): Bottleneck dimension of the CAE.
+            cae_h (int): Spatial height of the latent representation.
+            cae_w (int): Spatial width of the latent representation.
+            hidden_dim_mem (int): Hidden dimension for the Memory Network.
+        """
+        super().__init__()
+        self.cae = ConvolutionalAutoencoder(embedding_dim, latent_dim)
+        
+        self.latent_dim = latent_dim
+        self.cae_h = cae_h
+        self.cae_w = cae_w
+        
+        # Input to memory network is the flattened latent representation
+        self.memory_input_dim = latent_dim * cae_h * cae_w
+        self.memory = MemoryNetwork(
+            input_dim=self.memory_input_dim,
+            hidden_dim=hidden_dim_mem
+        )
 
-        self.best_val_loss = float("inf")
+    def forward(self, x_seq: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        Forward pass of the model.
 
-        self.history = {
-            "train_loss": [], "train_rec": [], "train_pred": [],
-            "val_loss": [], "val_rec": [], "val_pred": []
+        Args:
+            x_seq (torch.Tensor): Input sequence of shape (B, T, D, H, W).
+
+        Returns:
+            Dict[str, torch.Tensor]: A dictionary containing:
+                - reconstructions: Reconstructed sequence (B, T, D, H, W).
+                - z_f: Spatial latent features (B, T, latent_dim, cae_h, cae_w).
+                - z_pred: Predicted latent features for steps 1 to T-1 (B, T-1, latent_dim*cae_h*cae_w).
+                - recon_error: Spatial reconstruction error (B, T).
+        """
+        batch_size, time_steps, d, h, w = x_seq.shape
+        
+        # 1. Spatial Reconstruction (CAE)
+        # Flatten temporal dimension for CAE processing
+        x_flat = x_seq.view(batch_size * time_steps, d, h, w)
+        x_rec_flat, z_f_flat = self.cae(x_flat)
+        
+        # Restore temporal dimension
+        x_rec = x_rec_flat.view(batch_size, time_steps, d, h, w)
+        z_f = z_f_flat.view(batch_size, time_steps, self.latent_dim, self.cae_h, self.cae_w)
+        
+        # 2. Temporal Prediction (Memory Network)
+        # Flatten spatial dimensions for Memory Network
+        z_f_seq = z_f.view(batch_size, time_steps, -1)
+        
+        # Sequential prediction: predict z_t+1 from z_1...z_t
+        # We'll take sub-sequences to predict future steps
+        z_preds = []
+        for t in range(1, time_steps):
+            # Context is all steps up to t
+            z_context = z_f_seq[:, :t, :]
+            z_next_pred = self.memory(z_context)
+            z_preds.append(z_next_pred)
+            
+        z_pred = torch.stack(z_preds, dim=1) if z_preds else torch.empty((batch_size, 0, self.memory_input_dim), device=x_seq.device)
+        
+        # 3. Anomaly Scores (Simple Reconstruction Error for now)
+        recon_error = torch.mean((x_seq - x_rec)**2, dim=(2, 3, 4))
+        
+        return {
+            "reconstructions": x_rec,
+            "z_f": z_f,
+            "z_pred": z_pred,
+            "recon_error": recon_error
         }
-
-        self.use_amp = config.use_amp and (self.device.type == "cuda")
-        self.scaler = GradScaler(enabled=self.use_amp)
-
-        self.best_acc = 0.0
-        self.best_model_wts = copy.deepcopy(model.state_dict())
-
-    # ============================================================
-    # TRAIN
-    # ============================================================
-
-    def train_epoch(self, dataloader):
-
-        self.model.train()
-
-        summary = {"loss": 0.0, "rec": 0.0, "pred": 0.0}
-
-        if len(dataloader) == 0:
-            print("⚠ Train loader vacío")
-            return summary
-
-        pbar = tqdm(dataloader, desc="Training")
-
-        for batch in pbar:
-
-            x_seq = batch.to(self.device)
-
-            self.optimizer.zero_grad()
-
-            with autocast(enabled=self.device.type == "cuda"):
-
-                outputs = self.model(x_seq)
-                loss, l_rec, l_pred = self.criterion(outputs, x_seq)
-
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-
-            summary["loss"] += loss.item()
-            summary["rec"] += l_rec.item()
-            summary["pred"] += l_pred.item()
-
-            pbar.set_postfix({
-                "Total": f"{loss.item():.4f}",
-                "Rec": f"{l_rec.item():.4f}",
-                "Pred": f"{l_pred.item():.4f}"
-            })
-
-        n = len(dataloader)
-
-        return {k: v / n for k, v in summary.items()}
-
-    # ============================================================
-    # EVAL
-    # ============================================================
-
-    @torch.no_grad()
-    def evaluate(self, dataloader):
-
-        self.model.eval()
-
-        summary = {"loss": 0.0, "rec": 0.0, "pred": 0.0}
-
-        if dataloader is None or len(dataloader) == 0:
-            print("⚠ Val loader vacío")
-            return summary
-
-        for batch in dataloader:
-
-            x_seq = batch.to(self.device)
-
-            with torch.cuda.amp.autocast(enabled=self.device.type == "cuda"):
-
-                outputs = self.model(x_seq)
-                loss, l_rec, l_pred = self.criterion(outputs, x_seq)
-
-            summary["loss"] += loss.item()
-            summary["rec"] += l_rec.item()
-            summary["pred"] += l_pred.item()
-
-        n = len(dataloader)
-
-        return {k: v / n for k, v in summary.items()}
-
-    # ============================================================
-    # FIT
-    # ============================================================
-
-    def fit(self, train_loader, val_loader=None):
-
-        print(f"Iniciando entrenamiento en {self.device}")
-
-        for epoch in range(self.config.train.epochs):
-
-            train_metrics = self.train_epoch(train_loader)
-
-            self.history["train_loss"].append(train_metrics["loss"])
-            self.history["train_rec"].append(train_metrics["rec"])
-            self.history["train_pred"].append(train_metrics["pred"])
-
-            log_msg = (
-                f"Epoch [{epoch+1}/{self.config.train.epochs}] "
-                f"| Loss: {train_metrics['loss']:.4f} "
-                f"| Rec: {train_metrics['rec']:.4f} "
-                f"| Pred: {train_metrics['pred']:.4f}"
-            )
-
-            if val_loader:
-
-                val_metrics = self.evaluate(val_loader)
-
-                self.history["val_loss"].append(val_metrics["loss"])
-                self.history["val_rec"].append(val_metrics["rec"])
-                self.history["val_pred"].append(val_metrics["pred"])
-
-                log_msg += (
-                    f" | Val Loss: {val_metrics['loss']:.4f}"
-                    f" | Val Rec: {val_metrics['rec']:.4f}"
-                )
-
-                # Mejor modelo
-                if val_metrics["loss"] < self.best_val_loss:
-                    self.best_val_loss = val_metrics["loss"]
-                    self.save_checkpoint(epoch, is_best=True)
-
-            print(log_msg)
-
-            # Backup periódico
-            if (epoch + 1) % 10 == 0:
-                self.save_checkpoint(epoch, is_best=False)
-
-    # ============================================================
-    # CHECKPOINT
-    # ============================================================
-
-    def save_checkpoint(self, epoch: int, is_best: bool = False):
-
-        filename = "best_model.pt" if is_best else f"alphadeforest_epoch_{epoch+1}.pt"
-        path = self.checkpoint_dir / filename
-
-        torch.save({
-            "epoch": epoch,
-            "model_state_dict": self.model.state_dict(),
-            "optimizer_state_dict": self.optimizer.state_dict(),
-            "config": self.config.dict(),
-            "best_val_loss": self.best_val_loss
-        }, path)
-
-        if is_best:
-            print(f"Nuevo mejor modelo guardado → {path}")
-        else:
-            print(f"Checkpoint guardado → {path}")

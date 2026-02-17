@@ -1,20 +1,37 @@
+"""
+Dataset module for AlphaDeforest.
+This module handles loading temporal sequences of embeddings for deforestation detection.
+"""
+
 import os
 import json
 import numpy as np
 import torch
 from collections import defaultdict
 from torch.utils.data import Dataset, DataLoader
-from typing import List, Dict
+from typing import List, Dict, Any, Optional, Set, Tuple
 
 
 class AlphaEarthTemporalDataset(Dataset):
+    """
+    Dataset class for loading temporal sequences of satellite image embeddings.
+    """
     def __init__(
         self,
         dataset_dir: str,
-        years: List[int],          # ← años a usar (train o full)
-        mode: str = "train",       # "train" | "full"
-        transform=None,
+        years: List[int],
+        mode: str = "train",
+        transform: Optional[Any] = None,
     ):
+        """
+        Initializes the dataset.
+
+        Args:
+            dataset_dir (str): Directory where JSON and NPY files are located.
+            years (List[int]): List of years to include in the dataset.
+            mode (str): Dataset mode, either "train" or "full". Defaults to "train".
+            transform (Optional[Any]): Optional transform to apply to the sequences.
+        """
         assert mode in ["train", "full"]
 
         self.dataset_dir = dataset_dir
@@ -22,31 +39,30 @@ class AlphaEarthTemporalDataset(Dataset):
         self.mode = mode
         self.transform = transform
 
-        self.tile_metadata: List[Dict] = []
+        self.tile_metadata: List[Dict[str, Any]] = []
         self.sequences = self._load_sequences()
 
-    # ==========================================================
-    # 1. Cargar archivos planos desde Kaggle
-    # ==========================================================
-    def _load_sequences(self):
+    def _load_sequences(self) -> List[np.ndarray]:
+        """
+        Loads sequences from the dataset directory.
+        Identifies JSON/NPY pairs and builds temporal sequences for each tile.
 
+        Returns:
+            List[np.ndarray]: List of temporal sequences.
+        """
         tiles = defaultdict(list)
         coords_map = {}
 
         files = os.listdir(self.dataset_dir)
-
         json_files = [f for f in files if f.endswith(".json")]
 
         if len(json_files) == 0:
-            raise RuntimeError("No se encontraron archivos JSON.")
+            raise RuntimeError("No JSON files found in the dataset directory.")
 
-        print(f"Archivos JSON detectados: {len(json_files)}")
+        print(f"Detected JSON files: {len(json_files)}")
 
-        # ------------------------------------------------------
-        # Leer metadata + embeddings
-        # ------------------------------------------------------
+        # Load metadata + embeddings
         for json_name in json_files:
-
             json_path = os.path.join(self.dataset_dir, json_name)
 
             with open(json_path, "r") as f:
@@ -60,9 +76,9 @@ class AlphaEarthTemporalDataset(Dataset):
 
             emb = np.load(npy_path)
 
-            # Validación defensiva crítica
+            # Critical defensive validation
             if emb.ndim != 3:
-                print(f"Embedding inválido: {npy_name} → shape {emb.shape}")
+                print(f"Invalid embedding: {npy_name} -> shape {emb.shape}")
                 continue
 
             tile_id = meta["tile_id"]
@@ -83,13 +99,10 @@ class AlphaEarthTemporalDataset(Dataset):
                     "tile_id": tile_id
                 }
 
-        # ------------------------------------------------------
-        # Construcción de secuencias temporales
-        # ------------------------------------------------------
+        # Build temporal sequences
         sequences = []
 
         for tile_id in sorted(tiles.keys()):
-
             samples = sorted(tiles[tile_id], key=lambda x: x["year"])
 
             if len(samples) < 2:
@@ -97,31 +110,44 @@ class AlphaEarthTemporalDataset(Dataset):
 
             seq = np.stack([s["emb"] for s in samples], axis=0)
 
-            # Limpieza numérica (MUY importante)
+            # Numerical cleaning (REALLY important)
             seq = np.nan_to_num(seq, nan=0.0, posinf=0.0, neginf=0.0)
 
             sequences.append(seq)
-            self.tile_metadata.append(coords_map[tile_id])
 
-        print(f"Secuencias válidas construidas: {len(sequences)}")
+            self.tile_metadata.append({
+                "row": coords_map[tile_id]["row"],
+                "col": coords_map[tile_id]["col"],
+                "tile_id": tile_id,
+
+                # KEY FOR THE TEMPORAL PIPELINE
+                "years": [s["year"] for s in samples]
+            })
+
+        print(f"Valid sequences built: {len(sequences)}")
 
         if len(sequences) == 0:
-            raise RuntimeError("No se construyeron secuencias.")
+            raise RuntimeError("No sequences were built.")
 
         return sequences
 
-    # ==========================================================
-    def __len__(self):
+    def __len__(self) -> int:
+        """Returns the total number of sequences."""
         return len(self.sequences)
 
-    # ==========================================================
-    # 2. Conversión PyTorch correcta
-    # ==========================================================
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> torch.Tensor:
+        """
+        Returns a temporal sequence at the given index.
 
+        Args:
+            idx (int): Index of the sequence to retrieve.
+
+        Returns:
+            torch.Tensor: Temporal sequence tensor of shape (T, D, H, W).
+        """
         seq = self.sequences[idx]
 
-        # (T, H, W, D) → (T, D, H, W)
+        # (T, H, W, D) -> (T, D, H, W)
         seq = torch.from_numpy(seq).float().permute(0, 3, 1, 2)
 
         if self.transform:
@@ -131,13 +157,25 @@ class AlphaEarthTemporalDataset(Dataset):
 
 
 def get_dataloader(
-    dataset, 
+    dataset: Dataset, 
     batch_size: int, 
     num_workers: int, 
     partition: str = "train",
     pin_memory: bool = True
-):
+) -> DataLoader:
+    """
+    Creates a DataLoader for the given dataset.
 
+    Args:
+        dataset (Dataset): The dataset to load.
+        batch_size (int): Batch size.
+        num_workers (int): Number of worker threads for data loading.
+        partition (str): Dataset partition ("train" or other). Defaults to "train".
+        pin_memory (bool): Whether to pin memory for faster GPU transfer. Defaults to True.
+
+    Returns:
+        DataLoader: The configured DataLoader.
+    """
     is_train = partition.lower() == "train"
 
     return DataLoader(
