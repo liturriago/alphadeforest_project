@@ -24,12 +24,16 @@ class TrainConfig(BaseModel):
     lambda_rec: float = Field(1.0, description="Weight of reconstruction error (spatial)")
     lambda_pred: float = Field(0.8, description="Weight of prediction error (temporal)")
     device: str = Field("cuda", description="Training device (cuda/cpu)")
+    gamma: float = Field(0.9, description="Learning rate scheduler gamma")
+
+class ExperimentConfig(BaseModel):
+    name: str = Field(..., description="Experiment name")
+    version: str = Field(..., description="Experiment version")
+    output_dir: str = Field(..., description="Output directory for results")
     
-    # Output directories
-    checkpoint_dir: str = Field("checkpoints", description="Folder to save model weights")
-    results_dir: str = Field("results", description="Folder to save anomaly maps and images")
 
 class MainConfig(BaseModel):
     model: ModelConfig
     data: DataConfig
     train: TrainConfig
+    experiment: ExperimentConfig
