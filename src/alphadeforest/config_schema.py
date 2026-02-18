@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Union
 
 class ModelConfig(BaseModel):
     embedding_dim: int = Field(64, description="Dimension of the feature vector extracted by the Encoder")
@@ -28,7 +28,7 @@ class TrainConfig(BaseModel):
 
 class ExperimentConfig(BaseModel):
     name: str = Field(..., description="Experiment name")
-    version: str = Field(..., description="Experiment version")
+    version: Union[int, str] = Field(..., description="Experiment version")
     output_dir: str = Field(..., description="Output directory for results")
     
 

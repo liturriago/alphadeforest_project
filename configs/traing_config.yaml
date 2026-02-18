@@ -21,10 +21,7 @@ train:
   lambda_pred: 0.8
   use_amp: true
   device: "cuda"
-  seed: 42
   gamma: 0.94
-  lambda_rec: 1.0
-  lambda_pred: 0.8
 
 experiment:
   name: "alphadeforest_experiment"
