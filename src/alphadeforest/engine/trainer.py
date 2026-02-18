@@ -39,13 +39,14 @@ class AlphaDeforestTrainer:
             optimizer (torch.optim.Optimizer): Optimizer.
             config (TrainConfig): Training configuration.
         """
-        self.model = model.to(self.device)
+        
         self.train_loader = train_loader
         self.valid_loader = valid_loader
         self.criterion = criterion
         self.optimizer = optimizer
         self.config = config
         self.device = torch.device(config.device)
+        self.model = model.to(self.device)
         
         self.best_loss = float('inf')
         
