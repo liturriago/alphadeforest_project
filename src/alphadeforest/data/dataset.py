@@ -82,7 +82,7 @@ class AlphaEarthTemporalDataset(Dataset):
                 continue
 
             tile_id = meta["tile_id"]
-            year = meta["year"]
+            year = int(meta["year"])
 
             if year not in self.years:
                 continue
