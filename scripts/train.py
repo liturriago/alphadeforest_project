@@ -57,7 +57,7 @@ def main(config_path: str, run_vis: bool = True) -> None:
     print("[TEST] Loading FULL Dataset (Mode='test')...")
     test_dataset = AlphaEarthTemporalDataset(
         dataset_dir=config.data.dataset_dir,
-        years=config.data.test_year,
+        years=config.data.test_years,
         mode="test" 
     )
 
