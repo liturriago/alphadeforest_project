@@ -10,18 +10,17 @@ data:
   num_workers: 4
   shuffle: true
   train_years: [2017, 2018, 2019, 2020, 2021]
-  test_years: [2022, 2023, 2024]
+  test_years: [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024]
   dataset_dir: "/kaggle/input/datasets/lucasiturriago/yotoco"
 
 train:
   seed: 42
   epochs: 100
-  lr: 0.0005
+  lr: 0.00001
   lambda_rec: 1.0
   lambda_pred: 0.8
-  use_amp: true
   device: "cuda"
-  gamma: 0.94
+  gamma: 0.90
 
 experiment:
   name: "alphadeforest_experiment"
