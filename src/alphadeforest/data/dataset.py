@@ -9,13 +9,15 @@ import numpy as np
 import torch
 from collections import defaultdict
 from torch.utils.data import Dataset, DataLoader
-from typing import List, Dict, Any, Optional, Set, Tuple
+from typing import List, Dict, Any, Optional
 
 
 class AlphaEarthTemporalDataset(Dataset):
     """
-    Dataset class for loading temporal sequences of satellite image embeddings.
+    Dataset for loading temporal sequences of AlphaEarth embeddings.
+    Assumes tile_id is a stable spatial identifier (rX_cY).
     """
+
     def __init__(
         self,
         dataset_dir: str,
@@ -23,19 +25,11 @@ class AlphaEarthTemporalDataset(Dataset):
         mode: str = "train",
         transform: Optional[Any] = None,
     ):
-        """
-        Initializes the dataset.
-
-        Args:
-            dataset_dir (str): Directory where JSON and NPY files are located.
-            years (List[int]): List of years to include in the dataset.
-            mode (str): Dataset mode, either "train" or "full". Defaults to "train".
-            transform (Optional[Any]): Optional transform to apply to the sequences.
-        """
         assert mode in ["train", "full"]
 
         self.dataset_dir = dataset_dir
-        self.years = set(years)
+        self.years = sorted(years)   # ← deterministic ordering
+        self.years_set = set(years)
         self.mode = mode
         self.transform = transform
 
@@ -43,32 +37,28 @@ class AlphaEarthTemporalDataset(Dataset):
         self.sequences = self._load_sequences()
 
     def _load_sequences(self) -> List[np.ndarray]:
-        """
-        Loads sequences from the dataset directory.
-        Identifies JSON/NPY pairs and builds temporal sequences for each tile.
 
-        Returns:
-            List[np.ndarray]: List of temporal sequences.
-        """
-        tiles = defaultdict(list)
-        coords_map = {}
+        tiles = defaultdict(dict)   # ← IMPORTANT CHANGE
 
         files = os.listdir(self.dataset_dir)
-        json_files = [f for f in files if f.endswith(".json")]
+        json_files = sorted(f for f in files if f.endswith(".meta.json"))
 
         if len(json_files) == 0:
-            raise RuntimeError("No JSON files found in the dataset directory.")
+            raise RuntimeError("No .meta.json files found.")
 
-        print(f"Detected JSON files: {len(json_files)}")
+        print(f"Detected metadata files: {len(json_files)}")
 
+        # ------------------------------------------------------
         # Load metadata + embeddings
+        # ------------------------------------------------------
         for json_name in json_files:
+
             json_path = os.path.join(self.dataset_dir, json_name)
 
             with open(json_path, "r") as f:
                 meta = json.load(f)
 
-            npy_name = json_name.replace(".json", ".npy")
+            npy_name = json_name.replace(".meta.json", ".emb.npy")
             npy_path = os.path.join(self.dataset_dir, npy_name)
 
             if not os.path.exists(npy_path):
@@ -76,85 +66,90 @@ class AlphaEarthTemporalDataset(Dataset):
 
             emb = np.load(npy_path)
 
-            # Critical defensive validation
             if emb.ndim != 3:
                 print(f"Invalid embedding: {npy_name} -> shape {emb.shape}")
                 continue
 
             tile_id = meta["tile_id"]
-            year = int(meta["year"])
+            year = meta["year"]
 
-            if year not in self.years:
+            if year not in self.years_set:
                 continue
 
-            tiles[tile_id].append({
-                "year": year,
-                "emb": emb
-            })
+            # Store by year (prevents duplicates / disorder)
+            tiles[tile_id][year] = emb
 
-            if tile_id not in coords_map:
-                coords_map[tile_id] = {
-                    "row": meta.get("row", 0),
-                    "col": meta.get("col", 0),
-                    "tile_id": tile_id
-                }
-
+        # ------------------------------------------------------
         # Build temporal sequences
+        # ------------------------------------------------------
         sequences = []
 
         for tile_id in sorted(tiles.keys()):
-            samples = sorted(tiles[tile_id], key=lambda x: x["year"])
 
-            if len(samples) < 2:
+            year_map = tiles[tile_id]
+
+            # Keep only available years (ordered)
+            available_years = sorted(year_map.keys())
+
+            if len(available_years) < 2:
                 continue
 
-            seq = np.stack([s["emb"] for s in samples], axis=0)
+            seq = np.stack(
+                [year_map[y] for y in available_years],
+                axis=0
+            )
 
-            # Numerical cleaning (REALLY important)
             seq = np.nan_to_num(seq, nan=0.0, posinf=0.0, neginf=0.0)
 
             sequences.append(seq)
 
-            self.tile_metadata.append({
-                "row": coords_map[tile_id]["row"],
-                "col": coords_map[tile_id]["col"],
-                "tile_id": tile_id,
+            # Extract row/col from tile_id (cleaner & safer)
+            row, col = self._parse_tile_id(tile_id)
 
-                # KEY FOR THE TEMPORAL PIPELINE
-                "years": [s["year"] for s in samples]
+            self.tile_metadata.append({
+                "row": row,
+                "col": col,
+                "tile_id": tile_id,
+                "years": available_years
             })
 
         print(f"Valid sequences built: {len(sequences)}")
 
         if len(sequences) == 0:
-            raise RuntimeError("No sequences were built.")
+            raise RuntimeError(
+                "No sequences were built. "
+                "Check year filtering or dataset consistency."
+            )
 
         return sequences
 
+    @staticmethod
+    def _parse_tile_id(tile_id: str):
+        """
+        Parse tile_id = rX_cY → (X, Y)
+        """
+        try:
+            parts = tile_id.split("_")
+            row = int(parts[0][1:])
+            col = int(parts[1][1:])
+            return row, col
+        except Exception:
+            return 0, 0
+
     def __len__(self) -> int:
-        """Returns the total number of sequences."""
         return len(self.sequences)
 
     def __getitem__(self, idx: int) -> torch.Tensor:
-        """
-        Returns a temporal sequence at the given index.
 
-        Args:
-            idx (int): Index of the sequence to retrieve.
-
-        Returns:
-            torch.Tensor: Temporal sequence tensor of shape (T, D, H, W).
-        """
         seq = self.sequences[idx]
 
-        # (T, H, W, D) -> (T, D, H, W)
+        # (T, H, W, D) → (T, D, H, W)
         seq = torch.from_numpy(seq).float().permute(0, 3, 1, 2)
 
         if self.transform:
             seq = self.transform(seq)
 
         return seq
-
 
 def get_dataloader(
     dataset: Dataset, 
