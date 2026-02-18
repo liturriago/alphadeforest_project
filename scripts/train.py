@@ -54,18 +54,18 @@ def main(config_path: str, run_vis: bool = True) -> None:
         partition="train"
     )
 
-    print("[TEST] Loading FULL Dataset (Mode='test')...")
+    print("[TEST] Loading FULL Dataset (Mode='full')...")
     test_dataset = AlphaEarthTemporalDataset(
         dataset_dir=config.data.dataset_dir,
         years=config.data.test_years,
-        mode="test" 
+        mode="full" 
     )
 
     test_loader = get_dataloader(
         test_dataset, 
         batch_size=config.data.batch_size, 
         num_workers=config.data.num_workers,
-        partition="test"
+        partition="full"
     )
 
     print("Initializing Model...")
