@@ -12,7 +12,7 @@ from tqdm import tqdm
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from alphadeforest.config_schema import TrainConfig
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 
 class AlphaDeforestTrainer:
     """
@@ -87,7 +87,7 @@ class AlphaDeforestTrainer:
         
         pbar = tqdm(dataloader, desc="Training")
         for batch in pbar:
-            x_seq = batch.to(self.device)
+            x_seq = batch.to(self.device, dtype=torch.float32)
             
             self.optimizer.zero_grad()
             
@@ -123,7 +123,7 @@ class AlphaDeforestTrainer:
         summary = {"loss": 0.0, "rec": 0.0, "pred": 0.0}
         
         for batch in dataloader:
-            x_seq = batch.to(self.device)
+            x_seq = batch.to(self.device, dtype=torch.float32)
             with autocast(enabled=self.use_amp):
                 outputs = self.model(x_seq)
                 loss, l_rec, l_pred = self.criterion(outputs, x_seq)
