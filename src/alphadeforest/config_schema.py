@@ -25,6 +25,7 @@ class TrainConfig(BaseModel):
     lambda_pred: float = Field(0.8, description="Weight of prediction error (temporal)")
     device: str = Field("cuda", description="Training device (cuda/cpu)")
     gamma: float = Field(0.9, description="Learning rate scheduler gamma")
+    use_amp: bool = Field(True, description="If True, uses automatic mixed precision")
 
 class ExperimentConfig(BaseModel):
     name: str = Field(..., description="Experiment name")
