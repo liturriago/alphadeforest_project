@@ -91,7 +91,7 @@ class AlphaDeforestTrainer:
             
             self.optimizer.zero_grad()
             
-            with autocast(enabled=self.use_amp):
+            with autocast(enabled=self.use_amp, device_type=self.device):
                 outputs = self.model(x_seq)
                 loss, l_rec, l_pred = self.criterion(outputs, x_seq)
             
@@ -124,7 +124,7 @@ class AlphaDeforestTrainer:
         
         for batch in dataloader:
             x_seq = batch.to(self.device, dtype=torch.float32)
-            with autocast(enabled=self.use_amp):
+            with autocast(enabled=self.use_amp, device_type=self.device):
                 outputs = self.model(x_seq)
                 loss, l_rec, l_pred = self.criterion(outputs, x_seq)
             
