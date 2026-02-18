@@ -75,65 +75,58 @@ class AlphaDeforestTrainer:
     def train_epoch(self, dataloader: torch.utils.data.DataLoader) -> Dict[str, float]:
         """
         Runs a single training epoch.
-
-        Args:
-            dataloader (DataLoader): The training DataLoader.
-
-        Returns:
-            Dict[str, float]: Average metrics for the epoch.
         """
         self.model.train()
         summary = {"loss": 0.0, "rec": 0.0, "pred": 0.0}
         
         pbar = tqdm(dataloader, desc="Training")
+
         for batch in pbar:
             x_seq = batch.to(self.device, dtype=torch.float32)
-            
+
             self.optimizer.zero_grad()
-            
-            with autocast(enabled=self.use_amp, device_type=self.config.device):
-                outputs = self.model(x_seq)
-                loss, l_rec, l_pred = self.criterion(outputs, x_seq)
-            
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            
+
+            outputs = self.model(x_seq)
+            loss, l_rec, l_pred = self.criterion(outputs, x_seq)
+
+            loss.backward()
+            self.optimizer.step()
+
             summary["loss"] += loss.item()
             summary["rec"] += l_rec.item()
             summary["pred"] += l_pred.item()
-            
-            pbar.set_postfix({"Total": f"{loss.item():.4f}", "Rec": f"{l_rec.item():.4f}"})
-            
+
+            pbar.set_postfix({
+                "Total": f"{loss.item():.4f}",
+                "Rec": f"{l_rec.item():.4f}",
+                "Pred": f"{l_pred.item():.4f}"
+            })
+
         n = len(dataloader)
         return {k: v / n for k, v in summary.items()}
+
 
     @torch.no_grad()
     def evaluate(self, dataloader: torch.utils.data.DataLoader) -> Dict[str, float]:
         """
         Runs evaluation on the given dataloader.
-
-        Args:
-            dataloader (DataLoader): The evaluation DataLoader.
-
-        Returns:
-            Dict[str, float]: Average metrics for the evaluation.
         """
         self.model.eval()
         summary = {"loss": 0.0, "rec": 0.0, "pred": 0.0}
-        
+
         for batch in dataloader:
             x_seq = batch.to(self.device, dtype=torch.float32)
-            with autocast(enabled=self.use_amp, device_type=self.config.device):
-                outputs = self.model(x_seq)
-                loss, l_rec, l_pred = self.criterion(outputs, x_seq)
-            
+
+            outputs = self.model(x_seq)
+            loss, l_rec, l_pred = self.criterion(outputs, x_seq)
+
             summary["loss"] += loss.item()
             summary["rec"] += l_rec.item()
             summary["pred"] += l_pred.item()
-            
+
         n = len(dataloader)
         return {k: v / n for k, v in summary.items()}
+
 
     def fit(self, scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None) -> torch.nn.Module:
         """
