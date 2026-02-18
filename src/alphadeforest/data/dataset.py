@@ -181,5 +181,5 @@ def get_dataloader(
         pin_memory=pin_memory,
         prefetch_factor=2 if num_workers > 0 else None,
         persistent_workers=True if num_workers > 0 else False,
-        drop_last=is_train
+        drop_last=is_train and len(dataset) >= batch_size
     )
