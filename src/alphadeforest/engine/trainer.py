@@ -46,9 +46,6 @@ class AlphaDeforestTrainer:
         self.optimizer = optimizer
         self.config = config
         self.device = torch.device(config.device)
-
-        self.use_amp = config.use_amp and (self.device.type == 'cuda')
-        self.scaler = GradScaler(enabled=self.use_amp)
         
         self.best_loss = float('inf')
         
