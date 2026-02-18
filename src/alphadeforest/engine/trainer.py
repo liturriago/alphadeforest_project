@@ -39,7 +39,7 @@ class AlphaDeforestTrainer:
             optimizer (torch.optim.Optimizer): Optimizer.
             config (TrainConfig): Training configuration.
         """
-        self.model = model
+        self.model = model.to(self.device)
         self.train_loader = train_loader
         self.valid_loader = valid_loader
         self.criterion = criterion
