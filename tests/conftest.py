@@ -98,10 +98,10 @@ def mock_dataset_dir(tmp_path: Path) -> str:
         base_name = f"{tile_id}_{year}"
         # Metadata
         meta = {"tile_id": tile_id, "year": year, "row": 0, "col": 0}
-        with open(d / f"{base_name}.json", "w") as f:
+        with open(d / f"{base_name}.meta.json", "w") as f:
             json.dump(meta, f)
         # Embedding (H, W, D) as expected by dataset.py before permuting to (D, H, W)
         emb = np.random.randn(128, 128, 64).astype(np.float32)
-        np.save(d / f"{base_name}.npy", emb)
+        np.save(d / f"{base_name}.emb.npy", emb)
         
     return str(d)
