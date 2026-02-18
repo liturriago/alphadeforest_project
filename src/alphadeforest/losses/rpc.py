@@ -57,6 +57,11 @@ class RPCLoss(nn.Module):
         else:
             # Shift z_f to get targets for prediction (z_t+1 predicted from z_t)
             z_f_target = z_f[:, 1:]
+            z_f_target = z_f_target.view(
+                z_f_target.size(0),
+                z_f_target.size(1),
+                -1
+            )   
             loss_pred = F.mse_loss(z_pred, z_f_target)
 
         # 3. Composite Loss
